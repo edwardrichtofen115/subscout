@@ -1,36 +1,166 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# SubScout
 
-## Getting Started
+A subscription and trial reminder service that monitors your Gmail inbox, uses AI to detect subscription signups, and creates Google Calendar reminders before renewal dates.
 
-First, run the development server:
+## Quick Start (View the App Locally)
 
 ```bash
+cd /Users/sudhanshubaluja10/Desktop/side-projects/subscout
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000) in your browser.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+**Note:** Without environment variables configured, you'll see the landing page but won't be able to sign in.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Available Scripts
 
-## Learn More
+| Command | Description |
+|---------|-------------|
+| `npm run dev` | Start development server at localhost:3000 |
+| `npm run build` | Build for production |
+| `npm run start` | Start production server |
+| `npm run lint` | Run ESLint |
+| `npm run db:generate` | Generate database migrations |
+| `npm run db:push` | Push schema changes to database |
+| `npm run db:studio` | Open Drizzle Studio (database GUI) |
 
-To learn more about Next.js, take a look at the following resources:
+## Full Setup (Required for Sign-in to Work)
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+### Step 1: Set up environment file
+```bash
+cp .env.example .env.local
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+### Step 2: Google Cloud Console
 
-## Deploy on Vercel
+Go to [console.cloud.google.com](https://console.cloud.google.com):
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+1. **Create a new project** named "SubScout"
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+2. **Enable APIs** (APIs & Services > Library):
+   - Gmail API
+   - Google Calendar API
+   - Cloud Pub/Sub API
+
+3. **Configure OAuth Consent Screen** (APIs & Services > OAuth consent screen):
+   - User Type: External
+   - App name: SubScout
+   - Add scopes:
+     - `.../auth/gmail.readonly`
+     - `.../auth/calendar.events`
+     - `.../auth/userinfo.email`
+     - `.../auth/userinfo.profile`
+   - Add your email as a test user
+
+4. **Create OAuth Credentials** (APIs & Services > Credentials > Create Credentials > OAuth client ID):
+   - Application type: Web application
+   - Authorized redirect URIs:
+     - `http://localhost:3000/api/auth/callback/google`
+   - Copy **Client ID** and **Client Secret** to `.env.local`
+
+5. **Set up Pub/Sub** (Pub/Sub > Create Topic):
+   - Topic name: `subscout-gmail`
+   - Create a push subscription pointing to `/api/webhooks/gmail?token=YOUR_TOKEN`
+   - Grant `gmail-api-push@system.gserviceaccount.com` Publisher role
+
+### Step 3: Vercel Postgres
+
+1. Create account at [vercel.com](https://vercel.com)
+2. Create a new project
+3. Go to Storage > Create Database > Postgres
+4. Copy connection strings to `.env.local`
+
+### Step 4: Anthropic API
+
+1. Go to [console.anthropic.com](https://console.anthropic.com)
+2. Create an API key
+3. Add to `.env.local`
+
+### Step 5: Generate secrets
+```bash
+# Generate AUTH_SECRET
+openssl rand -base64 32
+
+# Generate PUBSUB_VERIFICATION_TOKEN
+openssl rand -hex 16
+
+# Generate CRON_SECRET
+openssl rand -hex 16
+```
+
+### Step 6: Push database schema
+```bash
+npm run db:push
+```
+
+### Step 7: Run the app
+```bash
+npm run dev
+```
+
+## Environment Variables Reference
+
+```env
+# Google OAuth
+GOOGLE_CLIENT_ID=xxx.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=GOCSPX-xxx
+
+# Anthropic
+ANTHROPIC_API_KEY=sk-ant-xxx
+
+# NextAuth
+AUTH_SECRET=random-32-char-string
+AUTH_URL=http://localhost:3000
+
+# Database
+DATABASE_URL=postgres://...
+POSTGRES_URL=postgres://...
+
+# Pub/Sub
+GCP_PROJECT_ID=your-project-id
+PUBSUB_VERIFICATION_TOKEN=random-token
+
+# Cron
+CRON_SECRET=random-secret
+```
+
+## Project Structure
+
+```
+src/
+├── app/
+│   ├── api/
+│   │   ├── auth/[...nextauth]/   # Google OAuth
+│   │   ├── cron/renew-watches/   # Daily Gmail watch renewal
+│   │   ├── settings/             # User settings API
+│   │   ├── subscriptions/[id]/   # Subscription CRUD
+│   │   └── webhooks/gmail/       # Gmail push notifications
+│   ├── dashboard/                # Main dashboard
+│   ├── settings/                 # Settings page
+│   ├── signin/                   # Sign in page
+│   └── page.tsx                  # Landing page
+├── components/                   # React components
+├── lib/
+│   ├── db/                       # Database schema
+│   └── services/                 # Gmail, Claude, Calendar services
+└── types/                        # TypeScript types
+```
+
+## How It Works
+
+1. User signs in with Google (grants Gmail + Calendar access)
+2. App sets up Gmail push notifications for inbox
+3. When new email arrives, Gmail sends notification to webhook
+4. Webhook fetches email and sends to Claude for classification
+5. If subscription/trial detected, creates Google Calendar reminder
+6. User sees tracked subscriptions in dashboard
+
+## Deployment
+
+1. Push to GitHub
+2. Import in Vercel
+3. Add environment variables
+4. Deploy
+
+The cron job at `/api/cron/renew-watches` runs daily to keep Gmail monitoring active.
