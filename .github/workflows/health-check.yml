@@ -1,0 +1,67 @@
+name: Post-Deployment Health Check
+
+on:
+  # Run after Vercel deployment completes
+  deployment_status:
+
+  # Allow manual trigger
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'Deployment URL to check'
+        required: false
+        default: 'https://subscout-six.vercel.app'
+
+jobs:
+  health-check:
+    # Only run on successful deployments
+    if: github.event_name == 'workflow_dispatch' || github.event.deployment_status.state == 'success'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Determine URL
+        id: url
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "url=${{ github.event.inputs.url }}" >> $GITHUB_OUTPUT
+          else
+            echo "url=${{ github.event.deployment_status.target_url }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Wait for deployment to stabilize
+        run: sleep 30
+
+      - name: Run Health Check
+        id: health
+        run: |
+          URL="${{ steps.url.outputs.url }}/api/health"
+          echo "Checking: $URL"
+
+          RESPONSE=$(curl -s -w "\n%{http_code}" "$URL")
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | head -n -1)
+
+          echo "HTTP Status: $HTTP_CODE"
+          echo "Response:"
+          echo "$BODY" | jq . || echo "$BODY"
+
+          # Check if status is healthy or degraded (both return 200)
+          if [ "$HTTP_CODE" -eq 200 ]; then
+            STATUS=$(echo "$BODY" | jq -r '.status')
+            if [ "$STATUS" == "healthy" ]; then
+              echo "✅ All health checks passed!"
+              exit 0
+            elif [ "$STATUS" == "degraded" ]; then
+              echo "⚠️ Some health checks failed (degraded state)"
+              echo "$BODY" | jq '.checks[] | select(.status == "fail")'
+              exit 1
+            fi
+          fi
+
+          echo "❌ Health check failed with status $HTTP_CODE"
+          exit 1
+
+      - name: Report failure
+        if: failure()
+        run: |
+          echo "::error::Health check failed! Check the deployment configuration."
