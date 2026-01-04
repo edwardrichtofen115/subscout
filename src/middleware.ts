@@ -3,22 +3,17 @@ import { NextResponse } from "next/server";
 
 export default auth((req) => {
   const isLoggedIn = !!req.auth;
-  const isAuthPage = req.nextUrl.pathname.startsWith("/signin");
+  const isAuthPage = req.nextUrl.pathname === "/signin";
   const isProtectedRoute =
     req.nextUrl.pathname.startsWith("/dashboard") ||
     req.nextUrl.pathname.startsWith("/settings");
-  const isApiRoute = req.nextUrl.pathname.startsWith("/api");
-  const isWebhook = req.nextUrl.pathname.startsWith("/api/webhooks");
-  const isCron = req.nextUrl.pathname.startsWith("/api/cron");
 
-  if (isWebhook || isCron) {
-    return NextResponse.next();
-  }
-
+  // Redirect authenticated users away from signin page
   if (isAuthPage && isLoggedIn) {
     return NextResponse.redirect(new URL("/dashboard", req.nextUrl));
   }
 
+  // Redirect unauthenticated users to signin for protected routes
   if (isProtectedRoute && !isLoggedIn) {
     return NextResponse.redirect(new URL("/signin", req.nextUrl));
   }
@@ -27,5 +22,5 @@ export default auth((req) => {
 });
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+  matcher: ["/dashboard/:path*", "/settings/:path*", "/signin"],
 };
