@@ -45,41 +45,51 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
   },
   events: {
     async signIn({ user: authUser, account: authAccount }) {
-      if (authAccount && authUser.id && authUser.email) {
-        // Sync user to the app's users table (separate from NextAuth's user table)
-        // First, check if user exists in app's users table
-        const existingUser = await db
-          .select()
-          .from(users)
-          .where(eq(users.email, authUser.email))
-          .limit(1);
+      try {
+        if (authAccount && authUser.id && authUser.email) {
+          console.log("signIn event: syncing user", authUser.email);
 
-        if (existingUser.length === 0) {
-          // Create new user in app's users table
-          await db.insert(users).values({
-            email: authUser.email,
-            name: authUser.name,
-            image: authUser.image,
-            googleAccessToken: authAccount.access_token,
-            googleRefreshToken: authAccount.refresh_token,
-            googleTokenExpiry: authAccount.expires_at
-              ? new Date(authAccount.expires_at * 1000)
-              : null,
-          });
-        } else {
-          // Update existing user with new tokens
-          await db
-            .update(users)
-            .set({
+          // Sync user to the app's users table (separate from NextAuth's user table)
+          // First, check if user exists in app's users table
+          const existingUser = await db
+            .select()
+            .from(users)
+            .where(eq(users.email, authUser.email))
+            .limit(1);
+
+          if (existingUser.length === 0) {
+            // Create new user in app's users table
+            console.log("signIn event: creating new user");
+            await db.insert(users).values({
+              email: authUser.email,
+              name: authUser.name,
+              image: authUser.image,
               googleAccessToken: authAccount.access_token,
               googleRefreshToken: authAccount.refresh_token,
               googleTokenExpiry: authAccount.expires_at
                 ? new Date(authAccount.expires_at * 1000)
                 : null,
-              updatedAt: new Date(),
-            })
-            .where(eq(users.email, authUser.email));
+            });
+          } else {
+            // Update existing user with new tokens
+            console.log("signIn event: updating existing user tokens");
+            await db
+              .update(users)
+              .set({
+                googleAccessToken: authAccount.access_token,
+                googleRefreshToken: authAccount.refresh_token,
+                googleTokenExpiry: authAccount.expires_at
+                  ? new Date(authAccount.expires_at * 1000)
+                  : null,
+                updatedAt: new Date(),
+              })
+              .where(eq(users.email, authUser.email));
+          }
+          console.log("signIn event: sync complete");
         }
+      } catch (error) {
+        // Log the error but don't throw - don't break auth flow
+        console.error("signIn event failed:", error);
       }
     },
   },
