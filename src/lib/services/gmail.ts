@@ -9,12 +9,31 @@ const TOPIC_NAME = `projects/${GCP_PROJECT_ID}/topics/subscout-gmail`;
 export class GmailService {
   private gmail: gmail_v1.Gmail;
   private userId: string;
+  private readonly PROMOTION_LABELS = ["CATEGORY_PROMOTIONS"];
 
   constructor(accessToken: string, userId: string) {
     const auth = new google.auth.OAuth2();
     auth.setCredentials({ access_token: accessToken });
     this.gmail = google.gmail({ version: "v1", auth });
     this.userId = userId;
+  }
+
+  /**
+   * Check if a message is a promotional email (has CATEGORY_PROMOTIONS label)
+   */
+  private isPromotionalMessage(message: GmailMessage): boolean {
+    return message.labelIds?.some((label) =>
+      this.PROMOTION_LABELS.includes(label)
+    ) ?? false;
+  }
+
+  /**
+   * Check if a message is in the primary inbox (has INBOX label but not promotional categories)
+   */
+  private isPrimaryInboxMessage(message: GmailMessage): boolean {
+    const hasInboxLabel = message.labelIds?.includes("INBOX") ?? false;
+    const isPromotional = this.isPromotionalMessage(message);
+    return hasInboxLabel && !isPromotional;
   }
 
   async setupWatch(): Promise<{ historyId: string; expiration: number }> {
@@ -91,10 +110,14 @@ export class GmailService {
       const messages: GmailMessage[] = [];
       for (const messageId of limitedIds) {
         const message = await this.getMessage(messageId);
-        if (message) {
+        if (message && this.isPrimaryInboxMessage(message)) {
           messages.push(message);
         }
       }
+
+      console.log(
+        `Filtered to ${messages.length} primary inbox messages (excluding promotions)`
+      );
 
       return { messages, latestHistoryId };
     } catch (error: unknown) {
@@ -125,17 +148,24 @@ export class GmailService {
   }
 
   async getRecentMessages(maxResults: number = 10): Promise<GmailMessage[]> {
+    // Use query parameter to exclude promotional emails from the API call itself
     const listResponse = await this.gmail.users.messages.list({
       userId: "me",
-      maxResults,
+      maxResults: maxResults * 2, // Fetch more to account for filtering
       labelIds: ["INBOX"],
+      q: "-category:promotions", // Exclude promotional emails
     });
 
     const messages: GmailMessage[] = [];
     for (const msg of listResponse.data.messages || []) {
       const message = await this.getMessage(msg.id!);
-      if (message) {
+      // Double-check filtering even though we used query parameter
+      if (message && this.isPrimaryInboxMessage(message)) {
         messages.push(message);
+        // Stop once we have enough primary inbox messages
+        if (messages.length >= maxResults) {
+          break;
+        }
       }
     }
 

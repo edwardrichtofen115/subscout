@@ -78,6 +78,15 @@ export async function POST(request: NextRequest) {
     );
 
     for (const message of messages) {
+      // Skip promotional emails (additional safeguard)
+      const hasPromotionLabel = message.labelIds?.some((label) =>
+        label === "CATEGORY_PROMOTIONS"
+      );
+      if (hasPromotionLabel) {
+        console.log(`[Webhook] Skipping promotional email: ${message.id}`);
+        continue;
+      }
+
       const existingProcessed = await db.query.processedEmails.findFirst({
         where: and(
           eq(processedEmails.userId, user.id),
