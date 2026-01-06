@@ -53,13 +53,19 @@ export class GmailService {
       .where(eq(users.id, this.userId));
   }
 
-  async getMessagesSinceHistory(historyId: string): Promise<GmailMessage[]> {
+  async getMessagesSinceHistory(
+    historyId: string,
+    maxMessages: number = 5
+  ): Promise<{ messages: GmailMessage[]; latestHistoryId: string | null }> {
     try {
       const historyResponse = await this.gmail.users.history.list({
         userId: "me",
         startHistoryId: historyId,
         historyTypes: ["messageAdded"],
       });
+
+      // Get the latest historyId from response for updating cursor
+      const latestHistoryId = historyResponse.data.historyId || null;
 
       const messageIds = new Set<string>();
       for (const history of historyResponse.data.history || []) {
@@ -70,22 +76,29 @@ export class GmailService {
         }
       }
 
+      // Limit messages to prevent quota issues
+      const limitedIds = Array.from(messageIds).slice(0, maxMessages);
+      console.log(
+        `Found ${messageIds.size} messages, processing ${limitedIds.length}`
+      );
+
       const messages: GmailMessage[] = [];
-      for (const messageId of messageIds) {
+      for (const messageId of limitedIds) {
         const message = await this.getMessage(messageId);
         if (message) {
           messages.push(message);
         }
       }
 
-      return messages;
+      return { messages, latestHistoryId };
     } catch (error: unknown) {
       if (
         error instanceof Error &&
         "code" in error &&
         (error as { code: number }).code === 404
       ) {
-        return [];
+        // historyId too old, return empty and let caller update historyId
+        return { messages: [], latestHistoryId: null };
       }
       throw error;
     }

@@ -56,15 +56,22 @@ export async function POST(request: NextRequest) {
     const calendarService = new CalendarService(accessToken);
 
     const historyId = user.gmailHistoryId || pushData.historyId;
-    const messages = await gmailService.getMessagesSinceHistory(historyId);
+    const { messages, latestHistoryId } =
+      await gmailService.getMessagesSinceHistory(historyId);
 
+    // Update historyId immediately to prevent reprocessing on retry
+    const newHistoryId = latestHistoryId || pushData.historyId;
     await db
       .update(users)
       .set({
-        gmailHistoryId: pushData.historyId,
+        gmailHistoryId: newHistoryId,
         updatedAt: new Date(),
       })
       .where(eq(users.id, user.id));
+
+    console.log(
+      `Processing ${messages.length} messages for user ${user.email}`
+    );
 
     for (const message of messages) {
       const existingProcessed = await db.query.processedEmails.findFirst({
@@ -133,10 +140,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ status: "ok" });
   } catch (error) {
     console.error("Gmail webhook error:", error);
-    return NextResponse.json(
-      { error: "Internal server error" },
-      { status: 500 }
-    );
+    // Return 200 to prevent Pub/Sub retries which cause quota exhaustion
+    // Errors are logged and can be monitored separately
+    return NextResponse.json({ status: "error_logged" });
   }
 }
 
