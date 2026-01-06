@@ -197,7 +197,7 @@ export default async function DashboardPage() {
                 </p>
               </div>
             </div>
-            {user.googleAccessToken && <SyncButton />}
+            {user.googleAccessToken && isMonitoringEnabled && <SyncButton />}
           </div>
         </div>
 
