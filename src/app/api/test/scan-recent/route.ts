@@ -16,6 +16,7 @@ export async function GET(request: NextRequest) {
 
   const email = request.nextUrl.searchParams.get("email");
   const count = parseInt(request.nextUrl.searchParams.get("count") || "3");
+  const force = request.nextUrl.searchParams.get("force") === "true";
 
   if (!email) {
     return NextResponse.json({ error: "?email= required" }, { status: 400 });
@@ -50,7 +51,7 @@ export async function GET(request: NextRequest) {
   for (const message of messages) {
     const emailContent = GmailService.extractEmailContent(message);
 
-    // Check if already processed
+    // Check if already processed (skip check if force=true)
     const existing = await db.query.processedEmails.findFirst({
       where: and(
         eq(processedEmails.userId, user.id),
@@ -58,7 +59,7 @@ export async function GET(request: NextRequest) {
       ),
     });
 
-    if (existing) {
+    if (existing && !force) {
       results.push({
         subject: emailContent.subject,
         from: emailContent.from,
@@ -74,54 +75,73 @@ export async function GET(request: NextRequest) {
       emailContent.body
     );
 
-    // Mark as processed
-    await db.insert(processedEmails).values({
-      userId: user.id,
-      gmailMessageId: message.id,
-      isSubscription: classification.is_subscription,
-    });
+    // Mark as processed (skip if already exists)
+    if (!existing) {
+      await db.insert(processedEmails).values({
+        userId: user.id,
+        gmailMessageId: message.id,
+        isSubscription: classification.is_subscription,
+      });
+    }
 
     if (classification.is_subscription && classification.confidence >= 0.7) {
-      let endDate: Date | null = null;
-      if (classification.end_date) {
-        endDate = new Date(classification.end_date);
-      } else if (classification.duration_days) {
-        endDate = new Date(emailContent.date);
-        endDate.setDate(endDate.getDate() + classification.duration_days);
+      // Check if subscription already exists for this email
+      const existingSub = await db.query.subscriptions.findFirst({
+        where: and(
+          eq(subscriptions.userId, user.id),
+          eq(subscriptions.emailSubject, emailContent.subject)
+        ),
+      });
+
+      if (existingSub) {
+        results.push({
+          subject: emailContent.subject,
+          from: emailContent.from,
+          status: "subscription_already_exists",
+          classification,
+        });
       } else {
-        endDate = new Date(emailContent.date);
-        endDate.setDate(endDate.getDate() + 14);
-      }
+        let endDate: Date | null = null;
+        if (classification.end_date) {
+          endDate = new Date(classification.end_date);
+        } else if (classification.duration_days) {
+          endDate = new Date(emailContent.date);
+          endDate.setDate(endDate.getDate() + classification.duration_days);
+        } else {
+          endDate = new Date(emailContent.date);
+          endDate.setDate(endDate.getDate() + 14);
+        }
 
-      let calendarEventId: string | null = null;
-      if (endDate && userSettings) {
-        calendarEventId = await calendarService.createReminder(
-          classification.service_name || "Unknown Service",
-          classification.type || "subscription",
+        let calendarEventId: string | null = null;
+        if (endDate && userSettings) {
+          calendarEventId = await calendarService.createReminder(
+            classification.service_name || "Unknown Service",
+            classification.type || "subscription",
+            endDate,
+            userSettings.reminderDaysBefore
+          );
+        }
+
+        await db.insert(subscriptions).values({
+          userId: user.id,
+          serviceName: classification.service_name || "Unknown Service",
+          type: classification.type || "subscription",
+          detectedDate: emailContent.date,
           endDate,
-          userSettings.reminderDaysBefore
-        );
+          calendarEventId,
+          status: "active",
+          emailSubject: emailContent.subject,
+          emailSnippet: message.snippet,
+          confidence: Math.round(classification.confidence * 100),
+        });
+
+        results.push({
+          subject: emailContent.subject,
+          from: emailContent.from,
+          status: "subscription_created",
+          classification,
+        });
       }
-
-      await db.insert(subscriptions).values({
-        userId: user.id,
-        serviceName: classification.service_name || "Unknown Service",
-        type: classification.type || "subscription",
-        detectedDate: emailContent.date,
-        endDate,
-        calendarEventId,
-        status: "active",
-        emailSubject: emailContent.subject,
-        emailSnippet: message.snippet,
-        confidence: Math.round(classification.confidence * 100),
-      });
-
-      results.push({
-        subject: emailContent.subject,
-        from: emailContent.from,
-        status: "subscription_created",
-        classification,
-      });
     } else {
       results.push({
         subject: emailContent.subject,
