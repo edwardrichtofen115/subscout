@@ -65,7 +65,9 @@ export class ClaudeService {
 
       return classification;
     } catch (error) {
-      console.error("Error classifying email:", error);
+      console.error("[Claude] Error classifying email:", error);
+      console.error("[Claude] Error details:", JSON.stringify(error, Object.getOwnPropertyNames(error)));
+      const errorMessage = error instanceof Error ? error.message : String(error);
       return {
         is_subscription: false,
         confidence: 0,
@@ -73,7 +75,7 @@ export class ClaudeService {
         type: null,
         duration_days: null,
         end_date: null,
-        reasoning: "Failed to classify email",
+        reasoning: `Failed to classify: ${errorMessage}`,
       };
     }
   }
