@@ -56,8 +56,12 @@ export async function POST(request: NextRequest) {
     const calendarService = new CalendarService(accessToken);
 
     const historyId = user.gmailHistoryId || pushData.historyId;
+    console.log(`[Webhook] Using historyId: ${historyId} (from DB: ${user.gmailHistoryId}, from push: ${pushData.historyId})`);
+
     const { messages, latestHistoryId } =
       await gmailService.getMessagesSinceHistory(historyId);
+
+    console.log(`[Webhook] Gmail returned latestHistoryId: ${latestHistoryId}`);
 
     // Update historyId immediately to prevent reprocessing on retry
     const newHistoryId = latestHistoryId || pushData.historyId;

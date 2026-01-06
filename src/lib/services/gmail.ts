@@ -58,11 +58,17 @@ export class GmailService {
     maxMessages: number = 5
   ): Promise<{ messages: GmailMessage[]; latestHistoryId: string | null }> {
     try {
+      console.log(`[Gmail] Calling history.list with startHistoryId: ${historyId}`);
       const historyResponse = await this.gmail.users.history.list({
         userId: "me",
         startHistoryId: historyId,
         historyTypes: ["messageAdded"],
       });
+
+      console.log(`[Gmail] history.list response:`, JSON.stringify({
+        historyId: historyResponse.data.historyId,
+        historyCount: historyResponse.data.history?.length || 0,
+      }));
 
       // Get the latest historyId from response for updating cursor
       const latestHistoryId = historyResponse.data.historyId || null;
