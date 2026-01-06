@@ -39,6 +39,42 @@ async function setupGmailWatch(userId: string) {
   }
 }
 
+async function disableGmailWatch(userId: string) {
+  "use server";
+
+  try {
+    // Get fresh access token
+    const user = await db.query.users.findFirst({
+      where: eq(users.id, userId),
+    });
+
+    if (!user) {
+      return { success: false, error: "User not found" };
+    }
+
+    const accessToken = await getValidAccessToken(user);
+    if (!accessToken) {
+      return { success: false, error: "Failed to get access token" };
+    }
+
+    // Stop the Gmail watch
+    const gmailService = new GmailService(accessToken, userId);
+    await gmailService.stopWatch();
+
+    // Disable monitoring in settings
+    await db
+      .update(settings)
+      .set({ enabled: false, updatedAt: new Date() })
+      .where(eq(settings.userId, userId));
+
+    revalidatePath("/dashboard");
+    return { success: true };
+  } catch (error) {
+    console.error("Failed to disable Gmail watch:", error);
+    return { success: false, error: "Failed to disable Gmail monitoring" };
+  }
+}
+
 export default async function DashboardPage() {
   const session = await auth();
 
@@ -113,10 +149,23 @@ export default async function DashboardPage() {
             </form>
           )}
 
-          {isWatchActive && isMonitoringEnabled && (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <div className="w-2 h-2 bg-green-500 rounded-full" />
-              <span>Monitoring active</span>
+          {/* Show status and disable button if monitoring is active */}
+          {isWatchActive && isMonitoringEnabled && user.googleAccessToken && (
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <div className="w-2 h-2 bg-green-500 rounded-full" />
+                <span>Monitoring active</span>
+              </div>
+              <form
+                action={async () => {
+                  "use server";
+                  await disableGmailWatch(user.id);
+                }}
+              >
+                <Button type="submit" variant="outline">
+                  Disable Email Monitoring
+                </Button>
+              </form>
             </div>
           )}
         </div>

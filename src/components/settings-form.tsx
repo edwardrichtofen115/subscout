@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
@@ -16,6 +17,7 @@ export function SettingsForm({ initialSettings }: SettingsFormProps) {
   const [settings, setSettings] = useState(initialSettings);
   const [isSaving, setIsSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const router = useRouter();
 
   const handleSave = async () => {
     setIsSaving(true);
@@ -33,7 +35,10 @@ export function SettingsForm({ initialSettings }: SettingsFormProps) {
 
       if (res.ok) {
         setSaved(true);
-        setTimeout(() => setSaved(false), 2000);
+        // Redirect to dashboard after a short delay to show the success message
+        setTimeout(() => {
+          router.push("/dashboard");
+        }, 1000);
       }
     } catch (error) {
       console.error("Failed to save settings:", error);
