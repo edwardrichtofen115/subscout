@@ -85,6 +85,7 @@ export const users = pgTable("users", {
   googleTokenExpiry: timestamp("google_token_expiry"),
   gmailHistoryId: text("gmail_history_id"),
   gmailWatchExpiry: timestamp("gmail_watch_expiry"),
+  lastSyncAt: timestamp("last_sync_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });

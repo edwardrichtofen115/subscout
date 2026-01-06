@@ -40,6 +40,11 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# drizzle (keep migrations, ignore generated files if any)
+# Note: drizzle/ folder with migrations should be committed
+
+# claude
 .claude/settings.json
 .claude/hooks/pre-push-review.sh
 .claude/skills/code-review.md

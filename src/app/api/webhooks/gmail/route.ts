@@ -65,10 +65,12 @@ export async function POST(request: NextRequest) {
 
     // Update historyId immediately to prevent reprocessing on retry
     const newHistoryId = latestHistoryId || pushData.historyId;
+    const hasNewMessages = messages.length > 0;
     await db
       .update(users)
       .set({
         gmailHistoryId: newHistoryId,
+        lastSyncAt: hasNewMessages ? new Date() : undefined,
         updatedAt: new Date(),
       })
       .where(eq(users.id, user.id));
