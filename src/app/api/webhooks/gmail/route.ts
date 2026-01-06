@@ -4,6 +4,7 @@ import { eq, and } from "drizzle-orm";
 import { GmailService } from "@/lib/services/gmail";
 import { ClaudeService } from "@/lib/services/claude";
 import { CalendarService } from "@/lib/services/calendar";
+import { getValidAccessToken } from "@/lib/services/token";
 import type { GmailPushData } from "@/types";
 
 const PUBSUB_VERIFICATION_TOKEN = process.env.PUBSUB_VERIFICATION_TOKEN;
@@ -43,9 +44,16 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ status: "ok" });
     }
 
-    const gmailService = new GmailService(user.googleAccessToken, user.id);
+    // Get a valid access token, refreshing if expired
+    const accessToken = await getValidAccessToken(user);
+    if (!accessToken) {
+      console.log("Failed to get valid access token for user:", user.email);
+      return NextResponse.json({ status: "ok" });
+    }
+
+    const gmailService = new GmailService(accessToken, user.id);
     const claudeService = new ClaudeService();
-    const calendarService = new CalendarService(user.googleAccessToken);
+    const calendarService = new CalendarService(accessToken);
 
     const historyId = user.gmailHistoryId || pushData.historyId;
     const messages = await gmailService.getMessagesSinceHistory(historyId);

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db, users } from "@/lib/db";
 import { lt, isNotNull, and } from "drizzle-orm";
 import { GmailService } from "@/lib/services/gmail";
+import { getValidAccessToken } from "@/lib/services/token";
 
 export async function GET(request: NextRequest) {
   const authHeader = request.headers.get("authorization");
@@ -26,10 +27,15 @@ export async function GET(request: NextRequest) {
 
     for (const user of usersToRenew) {
       try {
-        const gmailService = new GmailService(
-          user.googleAccessToken!,
-          user.id
-        );
+        // Get a valid access token, refreshing if expired
+        const accessToken = await getValidAccessToken(user);
+        if (!accessToken) {
+          console.error(`Failed to get valid access token for user ${user.id}`);
+          results.push({ userId: user.id, status: "failed", error: "Token refresh failed" });
+          continue;
+        }
+
+        const gmailService = new GmailService(accessToken, user.id);
         await gmailService.setupWatch();
         results.push({ userId: user.id, status: "renewed" });
       } catch (error) {
