@@ -1,18 +1,36 @@
 import { auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
+import { revalidatePath } from "next/cache";
 import { db, subscriptions, settings, users } from "@/lib/db";
 import { eq } from "drizzle-orm";
 import { Header } from "@/components/header";
 import { SubscriptionList } from "@/components/subscription-list";
 import { Button } from "@/components/ui/button";
 import { GmailService } from "@/lib/services/gmail";
+import { getValidAccessToken } from "@/lib/services/token";
 
-async function setupGmailWatch(userId: string, accessToken: string) {
+async function setupGmailWatch(userId: string) {
   "use server";
 
   try {
+    // Get fresh access token
+    const user = await db.query.users.findFirst({
+      where: eq(users.id, userId),
+    });
+
+    if (!user) {
+      return { success: false, error: "User not found" };
+    }
+
+    const accessToken = await getValidAccessToken(user);
+    if (!accessToken) {
+      return { success: false, error: "Failed to get access token" };
+    }
+
     const gmailService = new GmailService(accessToken, userId);
     await gmailService.setupWatch();
+
+    revalidatePath("/dashboard");
     return { success: true };
   } catch (error) {
     console.error("Failed to setup Gmail watch:", error);
@@ -54,6 +72,7 @@ export default async function DashboardPage() {
 
   const isWatchActive =
     user.gmailWatchExpiry && new Date(user.gmailWatchExpiry) > new Date();
+  const isMonitoringEnabled = userSettings?.enabled ?? false;
 
   return (
     <div className="min-h-screen bg-background">
@@ -68,18 +87,24 @@ export default async function DashboardPage() {
             </p>
           </div>
 
-          {!isWatchActive && user.googleAccessToken && (
+          {/* Show enable button if: no active watch OR monitoring disabled */}
+          {(!isWatchActive || !isMonitoringEnabled) && user.googleAccessToken && (
             <form
               action={async () => {
                 "use server";
-                await setupGmailWatch(user.id, user.googleAccessToken!);
+                // Enable in settings if disabled
+                await db
+                  .update(settings)
+                  .set({ enabled: true, updatedAt: new Date() })
+                  .where(eq(settings.userId, user.id));
+                await setupGmailWatch(user.id);
               }}
             >
               <Button type="submit">Enable Email Monitoring</Button>
             </form>
           )}
 
-          {isWatchActive && (
+          {isWatchActive && isMonitoringEnabled && (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <div className="w-2 h-2 bg-green-500 rounded-full" />
               <span>Monitoring active</span>

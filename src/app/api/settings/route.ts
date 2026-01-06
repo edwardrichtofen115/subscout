@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { db, settings, users } from "@/lib/db";
 import { eq } from "drizzle-orm";
+import { GmailService } from "@/lib/services/gmail";
+import { getValidAccessToken } from "@/lib/services/token";
 
 export async function GET() {
   try {
@@ -78,6 +80,29 @@ export async function PUT(request: NextRequest) {
 
     if (typeof body.enabled === "boolean") {
       updates.enabled = body.enabled;
+
+      // Setup or stop Gmail watch based on enabled status
+      const accessToken = await getValidAccessToken(user);
+      if (accessToken) {
+        const gmailService = new GmailService(accessToken, user.id);
+        if (body.enabled) {
+          // Enable: setup fresh Gmail watch
+          try {
+            await gmailService.setupWatch();
+            console.log(`[Settings] Gmail watch enabled for user ${user.id}`);
+          } catch (error) {
+            console.error(`[Settings] Failed to setup Gmail watch:`, error);
+          }
+        } else {
+          // Disable: stop Gmail watch
+          try {
+            await gmailService.stopWatch();
+            console.log(`[Settings] Gmail watch disabled for user ${user.id}`);
+          } catch (error) {
+            console.error(`[Settings] Failed to stop Gmail watch:`, error);
+          }
+        }
+      }
     }
 
     await db.update(settings).set(updates).where(eq(settings.userId, user.id));

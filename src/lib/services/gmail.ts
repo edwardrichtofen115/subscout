@@ -55,7 +55,7 @@ export class GmailService {
 
   async getMessagesSinceHistory(
     historyId: string,
-    maxMessages: number = 5
+    maxMessages: number = 50
   ): Promise<{ messages: GmailMessage[]; latestHistoryId: string | null }> {
     try {
       console.log(`[Gmail] Calling history.list with startHistoryId: ${historyId}`);
