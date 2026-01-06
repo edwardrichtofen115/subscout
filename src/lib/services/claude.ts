@@ -43,8 +43,9 @@ export class ClaudeService {
       .replace("{from}", from)
       .replace("{body}", body.substring(0, 4000));
 
+    let response;
     try {
-      const response = await anthropic.messages.create({
+      response = await anthropic.messages.create({
         model: "claude-haiku-4-5-20251001",
         max_tokens: 500,
         messages: [
@@ -60,13 +61,21 @@ export class ClaudeService {
         throw new Error("Unexpected response type");
       }
 
-      const jsonStr = content.text.trim();
+      let jsonStr = content.text.trim();
+      
+      // Strip markdown code blocks if present (Claude sometimes wraps JSON in ```json ... ```)
+      jsonStr = jsonStr.replace(/^```(?:json)?\n?/i, "").replace(/\n?```$/i, "");
+      
       const classification: EmailClassification = JSON.parse(jsonStr);
 
       return classification;
     } catch (error) {
       console.error("[Claude] Error classifying email:", error);
       console.error("[Claude] Error details:", JSON.stringify(error, Object.getOwnPropertyNames(error)));
+      // Log the raw response for debugging if available
+      if (response?.content?.[0]?.type === "text") {
+        console.error("[Claude] Raw response:", response.content[0].text);
+      }
       const errorMessage = error instanceof Error ? error.message : String(error);
       return {
         is_subscription: false,
