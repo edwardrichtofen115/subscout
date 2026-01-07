@@ -19,12 +19,14 @@ interface FeedbackDialogProps {
   subscription: Subscription;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onDelete: (id: string) => void;
 }
 
 export function FeedbackDialog({
   subscription,
   open,
   onOpenChange,
+  onDelete,
 }: FeedbackDialogProps) {
   const [reason, setReason] = useState<FeedbackReason | "">("");
   const [description, setDescription] = useState("");
@@ -57,6 +59,8 @@ export function FeedbackDialog({
           setDescription("");
           setSubmitStatus("idle");
           onOpenChange(false);
+          // Delete the subscription after successful feedback submission
+          onDelete(subscription.id);
         }, 1500);
       } else {
         setSubmitStatus("error");
@@ -131,7 +135,7 @@ export function FeedbackDialog({
 
           {submitStatus === "success" && (
             <p className="text-sm text-green-600">
-              Thank you! Your feedback has been submitted.
+              Thank you! Your feedback has been submitted and the reminder will be removed.
             </p>
           )}
           {submitStatus === "error" && (
