@@ -77,17 +77,11 @@ export class GmailService {
     maxMessages: number = 50
   ): Promise<{ messages: GmailMessage[]; latestHistoryId: string | null }> {
     try {
-      console.log(`[Gmail] Calling history.list with startHistoryId: ${historyId}`);
       const historyResponse = await this.gmail.users.history.list({
         userId: "me",
         startHistoryId: historyId,
         historyTypes: ["messageAdded"],
       });
-
-      console.log(`[Gmail] history.list response:`, JSON.stringify({
-        historyId: historyResponse.data.historyId,
-        historyCount: historyResponse.data.history?.length || 0,
-      }));
 
       // Get the latest historyId from response for updating cursor
       const latestHistoryId = historyResponse.data.historyId || null;
@@ -103,9 +97,6 @@ export class GmailService {
 
       // Limit messages to prevent quota issues
       const limitedIds = Array.from(messageIds).slice(0, maxMessages);
-      console.log(
-        `Found ${messageIds.size} messages, processing ${limitedIds.length}`
-      );
 
       const messages: GmailMessage[] = [];
       for (const messageId of limitedIds) {
@@ -115,10 +106,6 @@ export class GmailService {
         }
       }
 
-      console.log(
-        `Filtered to ${messages.length} primary inbox messages (excluding promotions)`
-      );
-
       return { messages, latestHistoryId };
     } catch (error: unknown) {
       if (
@@ -127,8 +114,12 @@ export class GmailService {
         (error as { code: number }).code === 404
       ) {
         // historyId too old, return empty and let caller update historyId
+        console.log(
+          `[Gmail] HistoryId ${historyId} is too old, returning empty result`
+        );
         return { messages: [], latestHistoryId: null };
       }
+      console.error(`[Gmail] Error fetching messages since history:`, error);
       throw error;
     }
   }
@@ -142,7 +133,8 @@ export class GmailService {
       });
 
       return response.data as GmailMessage;
-    } catch {
+    } catch (error) {
+      console.error(`[Gmail] Error fetching message ${messageId}:`, error);
       return null;
     }
   }

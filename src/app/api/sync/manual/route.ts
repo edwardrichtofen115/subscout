@@ -8,11 +8,14 @@ import { CalendarService } from "@/lib/services/calendar";
 import { getValidAccessToken } from "@/lib/services/token";
 
 export async function POST(request: NextRequest) {
+  let userEmail: string | undefined;
   try {
     const session = await auth();
     if (!session?.user?.email) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+
+    userEmail = session.user.email;
 
     const user = await db.query.users.findFirst({
       where: eq(users.email, session.user.email),
@@ -41,50 +44,84 @@ export async function POST(request: NextRequest) {
     // Fetch recent messages (check last 20 emails)
     const messages = await gmailService.getRecentMessages(20);
 
+    if (messages.length === 0) {
+      console.log(`[ManualSync] No messages found for user ${user.email}`);
+      return NextResponse.json({
+        success: true,
+        processed: 0,
+        newSubscriptions: 0,
+        message: "No new emails to process.",
+      });
+    }
+
+    console.log(
+      `[ManualSync] Processing ${messages.length} message(s) for user ${user.email}`
+    );
+
     let processedCount = 0;
+    let skippedCount = 0;
     let newSubscriptionsCount = 0;
+    let errorCount = 0;
 
     for (const message of messages) {
-      const emailContent = GmailService.extractEmailContent(message);
+      const messageId = message.id;
+      let emailSubject = "";
+      let emailFrom = "";
 
-      // Check if already processed
-      const existing = await db.query.processedEmails.findFirst({
-        where: and(
-          eq(processedEmails.userId, user.id),
-          eq(processedEmails.gmailMessageId, message.id)
-        ),
-      });
+      try {
+        const emailContent = GmailService.extractEmailContent(message);
+        emailSubject = emailContent.subject;
+        emailFrom = emailContent.from;
 
-      if (existing) {
-        continue;
-      }
-
-      // Classify with Claude
-      const classification = await claudeService.classifyEmail(
-        emailContent.subject,
-        emailContent.from,
-        emailContent.body
-      );
-
-      // Mark as processed
-      await db.insert(processedEmails).values({
-        userId: user.id,
-        gmailMessageId: message.id,
-        isSubscription: classification.is_subscription,
-      });
-
-      processedCount++;
-
-      if (classification.is_subscription && classification.confidence >= 0.7) {
-        // Check if subscription already exists for this email
-        const existingSub = await db.query.subscriptions.findFirst({
+        // Check if already processed
+        const existing = await db.query.processedEmails.findFirst({
           where: and(
-            eq(subscriptions.userId, user.id),
-            eq(subscriptions.emailSubject, emailContent.subject)
+            eq(processedEmails.userId, user.id),
+            eq(processedEmails.gmailMessageId, messageId)
           ),
         });
 
-        if (!existingSub) {
+        if (existing) {
+          console.log(
+            `[ManualSync] Email ${messageId}: SKIPPED - already processed | Subject: "${emailSubject}"`
+          );
+          skippedCount++;
+          continue;
+        }
+
+        // Classify with Claude
+        const classification = await claudeService.classifyEmail(
+          emailContent.subject,
+          emailContent.from,
+          emailContent.body
+        );
+
+        // Mark as processed
+        await db.insert(processedEmails).values({
+          userId: user.id,
+          gmailMessageId: messageId,
+          isSubscription: classification.is_subscription,
+        });
+
+        processedCount++;
+
+        if (classification.is_subscription && classification.confidence >= 0.7) {
+          // Check if subscription already exists for this email
+          const existingSub = await db.query.subscriptions.findFirst({
+            where: and(
+              eq(subscriptions.userId, user.id),
+              eq(subscriptions.emailSubject, emailContent.subject)
+            ),
+          });
+
+          if (existingSub) {
+            console.log(
+              `[ManualSync] Email ${messageId}: SKIPPED - subscription already exists | Subject: "${emailSubject}" | Service: ${classification.service_name}`
+            );
+            skippedCount++;
+            continue;
+          }
+
           let endDate: Date | null = null;
           if (classification.end_date) {
             endDate = new Date(classification.end_date);
@@ -98,12 +135,19 @@ export async function POST(request: NextRequest) {
 
           let calendarEventId: string | null = null;
           if (endDate && userSettings) {
-            calendarEventId = await calendarService.createReminder(
-              classification.service_name || "Unknown Service",
-              classification.type || "subscription",
-              endDate,
-              userSettings.reminderDaysBefore
-            );
+            try {
+              calendarEventId = await calendarService.createReminder(
+                classification.service_name || "Unknown Service",
+                classification.type || "subscription",
+                endDate,
+                userSettings.reminderDaysBefore
+              );
+            } catch (calendarError) {
+              console.error(
+                `[ManualSync] Email ${messageId}: ERROR creating calendar event -`,
+                calendarError
+              );
+            }
           }
 
           await db.insert(subscriptions).values({
@@ -120,9 +164,26 @@ export async function POST(request: NextRequest) {
           });
 
           newSubscriptionsCount++;
+          console.log(
+            `[ManualSync] Email ${messageId}: SUCCESS - Subscription created | Subject: "${emailSubject}" | From: ${emailFrom} | Service: ${classification.service_name} | Type: ${classification.type} | Confidence: ${Math.round(classification.confidence * 100)}% | Duration: ${classification.duration_days ? classification.duration_days + " days" : "N/A"} | EndDate: ${classification.end_date || "N/A"} | Reasoning: ${classification.reasoning || "N/A"}`
+          );
+        } else {
+          console.log(
+            `[ManualSync] Email ${messageId}: PROCESSED - Not a subscription | Subject: "${emailSubject}" | From: ${emailFrom} | IsSubscription: ${classification.is_subscription} | Confidence: ${Math.round(classification.confidence * 100)}% | Reasoning: ${classification.reasoning || "N/A"}`
+          );
         }
+      } catch (error) {
+        errorCount++;
+        console.error(
+          `[ManualSync] Email ${messageId}: ERROR processing email | Subject: "${emailSubject}" | From: ${emailFrom} | Error:`,
+          error instanceof Error ? error.message : String(error)
+        );
       }
     }
+
+    console.log(
+      `[ManualSync] Summary for user ${user.email}: ${processedCount} processed, ${newSubscriptionsCount} subscriptions created, ${skippedCount} skipped, ${errorCount} errors`
+    );
 
     // Update lastSyncAt timestamp
     await db
@@ -140,7 +201,11 @@ export async function POST(request: NextRequest) {
       message: `Processed ${processedCount} new email(s). Found ${newSubscriptionsCount} new subscription(s).`,
     });
   } catch (error) {
-    console.error("Manual sync error:", error);
+    console.error(
+      `[ManualSync] FATAL ERROR${userEmail ? ` for user ${userEmail}` : ""}:`,
+      error instanceof Error ? error.message : String(error),
+      error instanceof Error ? error.stack : undefined
+    );
     return NextResponse.json(
       {
         error: "Failed to sync emails",

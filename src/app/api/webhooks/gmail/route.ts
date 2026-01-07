@@ -32,7 +32,9 @@ export async function POST(request: NextRequest) {
     });
 
     if (!user || !user.googleAccessToken) {
-      console.log("User not found or no access token:", pushData.emailAddress);
+      console.log(
+        `[Webhook] User not found or no access token: ${pushData.emailAddress}`
+      );
       return NextResponse.json({ status: "ok" });
     }
 
@@ -41,13 +43,16 @@ export async function POST(request: NextRequest) {
     });
 
     if (!userSettings?.enabled) {
+      console.log(`[Webhook] Monitoring disabled for user: ${user.email}`);
       return NextResponse.json({ status: "ok" });
     }
 
     // Get a valid access token, refreshing if expired
     const accessToken = await getValidAccessToken(user);
     if (!accessToken) {
-      console.log("Failed to get valid access token for user:", user.email);
+      console.error(
+        `[Webhook] Failed to get valid access token for user: ${user.email}`
+      );
       return NextResponse.json({ status: "ok" });
     }
 
@@ -56,12 +61,8 @@ export async function POST(request: NextRequest) {
     const calendarService = new CalendarService(accessToken);
 
     const historyId = user.gmailHistoryId || pushData.historyId;
-    console.log(`[Webhook] Using historyId: ${historyId} (from DB: ${user.gmailHistoryId}, from push: ${pushData.historyId})`);
-
     const { messages, latestHistoryId } =
       await gmailService.getMessagesSinceHistory(historyId);
-
-    console.log(`[Webhook] Gmail returned latestHistoryId: ${latestHistoryId}`);
 
     // Update historyId immediately to prevent reprocessing on retry
     const newHistoryId = latestHistoryId || pushData.historyId;
@@ -75,86 +76,143 @@ export async function POST(request: NextRequest) {
       })
       .where(eq(users.id, user.id));
 
+    if (messages.length === 0) {
+      console.log(`[Webhook] No new messages for user ${user.email}`);
+      return NextResponse.json({ status: "ok" });
+    }
+
     console.log(
-      `Processing ${messages.length} messages for user ${user.email}`
+      `[Webhook] Processing ${messages.length} message(s) for user ${user.email}`
     );
 
+    let processedCount = 0;
+    let skippedCount = 0;
+    let subscriptionCount = 0;
+    let errorCount = 0;
+
     for (const message of messages) {
-      // Skip promotional emails (additional safeguard)
-      const hasPromotionLabel = message.labelIds?.some((label) =>
-        label === "CATEGORY_PROMOTIONS"
-      );
-      if (hasPromotionLabel) {
-        console.log(`[Webhook] Skipping promotional email: ${message.id}`);
-        continue;
-      }
+      const messageId = message.id;
+      let emailSubject = "";
+      let emailFrom = "";
 
-      const existingProcessed = await db.query.processedEmails.findFirst({
-        where: and(
-          eq(processedEmails.userId, user.id),
-          eq(processedEmails.gmailMessageId, message.id)
-        ),
-      });
-
-      if (existingProcessed) {
-        continue;
-      }
-
-      const emailContent = GmailService.extractEmailContent(message);
-
-      const classification = await claudeService.classifyEmail(
-        emailContent.subject,
-        emailContent.from,
-        emailContent.body
-      );
-
-      await db.insert(processedEmails).values({
-        userId: user.id,
-        gmailMessageId: message.id,
-        isSubscription: classification.is_subscription,
-      });
-
-      if (classification.is_subscription && classification.confidence >= 0.7) {
-        let endDate: Date | null = null;
-
-        if (classification.end_date) {
-          endDate = new Date(classification.end_date);
-        } else if (classification.duration_days) {
-          endDate = new Date(emailContent.date);
-          endDate.setDate(endDate.getDate() + classification.duration_days);
-        } else {
-          endDate = new Date(emailContent.date);
-          endDate.setDate(endDate.getDate() + 14);
+      try {
+        // Skip promotional emails (additional safeguard)
+        const hasPromotionLabel = message.labelIds?.some(
+          (label) => label === "CATEGORY_PROMOTIONS"
+        );
+        if (hasPromotionLabel) {
+          console.log(
+            `[Webhook] Email ${messageId}: SKIPPED - promotional email`
+          );
+          skippedCount++;
+          continue;
         }
 
-        let calendarEventId: string | null = null;
-        if (endDate && userSettings) {
-          calendarEventId = await calendarService.createReminder(
-            classification.service_name || "Unknown Service",
-            classification.type || "subscription",
+        const existingProcessed = await db.query.processedEmails.findFirst({
+          where: and(
+            eq(processedEmails.userId, user.id),
+            eq(processedEmails.gmailMessageId, messageId)
+          ),
+        });
+
+        if (existingProcessed) {
+          console.log(
+            `[Webhook] Email ${messageId}: SKIPPED - already processed`
+          );
+          skippedCount++;
+          continue;
+        }
+
+        const emailContent = GmailService.extractEmailContent(message);
+        emailSubject = emailContent.subject;
+        emailFrom = emailContent.from;
+
+        const classification = await claudeService.classifyEmail(
+          emailContent.subject,
+          emailContent.from,
+          emailContent.body
+        );
+
+        await db.insert(processedEmails).values({
+          userId: user.id,
+          gmailMessageId: messageId,
+          isSubscription: classification.is_subscription,
+        });
+
+        processedCount++;
+
+        if (classification.is_subscription && classification.confidence >= 0.7) {
+          let endDate: Date | null = null;
+
+          if (classification.end_date) {
+            endDate = new Date(classification.end_date);
+          } else if (classification.duration_days) {
+            endDate = new Date(emailContent.date);
+            endDate.setDate(endDate.getDate() + classification.duration_days);
+          } else {
+            endDate = new Date(emailContent.date);
+            endDate.setDate(endDate.getDate() + 14);
+          }
+
+          let calendarEventId: string | null = null;
+          if (endDate && userSettings) {
+            try {
+              calendarEventId = await calendarService.createReminder(
+                classification.service_name || "Unknown Service",
+                classification.type || "subscription",
+                endDate,
+                userSettings.reminderDaysBefore
+              );
+            } catch (calendarError) {
+              console.error(
+                `[Webhook] Email ${messageId}: ERROR creating calendar event -`,
+                calendarError
+              );
+            }
+          }
+
+          await db.insert(subscriptions).values({
+            userId: user.id,
+            serviceName: classification.service_name || "Unknown Service",
+            type: classification.type || "subscription",
+            detectedDate: emailContent.date,
             endDate,
-            userSettings.reminderDaysBefore
+            calendarEventId,
+            status: "active",
+            emailSubject: emailContent.subject,
+            emailSnippet: message.snippet,
+            confidence: Math.round(classification.confidence * 100),
+          });
+
+          subscriptionCount++;
+          console.log(
+            `[Webhook] Email ${messageId}: SUCCESS - Subscription created | Subject: "${emailSubject}" | From: ${emailFrom} | Service: ${classification.service_name} | Type: ${classification.type} | Confidence: ${Math.round(classification.confidence * 100)}% | Duration: ${classification.duration_days ? classification.duration_days + " days" : "N/A"} | EndDate: ${classification.end_date || "N/A"} | Reasoning: ${classification.reasoning || "N/A"}`
+          );
+        } else {
+          console.log(
+            `[Webhook] Email ${messageId}: PROCESSED - Not a subscription | Subject: "${emailSubject}" | From: ${emailFrom} | IsSubscription: ${classification.is_subscription} | Confidence: ${Math.round(classification.confidence * 100)}% | Reasoning: ${classification.reasoning || "N/A"}`
           );
         }
-
-        await db.insert(subscriptions).values({
-          userId: user.id,
-          serviceName: classification.service_name || "Unknown Service",
-          type: classification.type || "subscription",
-          detectedDate: emailContent.date,
-          endDate,
-          calendarEventId,
-          status: "active",
-          emailSubject: emailContent.subject,
-          emailSnippet: message.snippet,
-          confidence: Math.round(classification.confidence * 100),
-        });
+      } catch (error) {
+        errorCount++;
+        console.error(
+          `[Webhook] Email ${messageId}: ERROR processing email | Subject: "${emailSubject}" | From: ${emailFrom} | Error:`,
+          error instanceof Error ? error.message : String(error)
+        );
       }
     }
 
+    console.log(
+      `[Webhook] Summary for user ${user.email}: ${processedCount} processed, ${subscriptionCount} subscriptions created, ${skippedCount} skipped, ${errorCount} errors`
+    );
+
     return NextResponse.json({ status: "ok" });
   } catch (error) {
-    console.error("Gmail webhook error:", error);
+    console.error(
+      `[Webhook] FATAL ERROR:`,
+      error instanceof Error ? error.message : String(error),
+      error instanceof Error ? error.stack : undefined
+    );
     // Return 200 to prevent Pub/Sub retries which cause quota exhaustion
     // Errors are logged and can be monitored separately
     return NextResponse.json({ status: "error_logged" });
