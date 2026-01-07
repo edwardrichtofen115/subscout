@@ -98,13 +98,28 @@ export class GmailService {
       // Limit messages to prevent quota issues
       const limitedIds = Array.from(messageIds).slice(0, maxMessages);
 
-      const messages: GmailMessage[] = [];
-      for (const messageId of limitedIds) {
-        const message = await this.getMessage(messageId);
-        if (message && this.isPrimaryInboxMessage(message)) {
-          messages.push(message);
+      // Fetch messages in parallel batches of 10
+      const BATCH_SIZE = 10;
+      const allResults: (GmailMessage | null)[] = [];
+
+      for (let i = 0; i < limitedIds.length; i += BATCH_SIZE) {
+        const batch = limitedIds.slice(i, i + BATCH_SIZE);
+        const batchResults = await Promise.allSettled(
+          batch.map((messageId) => this.getMessage(messageId))
+        );
+
+        for (const result of batchResults) {
+          if (result.status === "fulfilled") {
+            allResults.push(result.value);
+          } else {
+            console.error("[Gmail] Failed to fetch message:", result.reason);
+          }
         }
       }
+
+      const messages = allResults
+        .filter((msg): msg is GmailMessage => msg !== null)
+        .filter((msg) => this.isPrimaryInboxMessage(msg));
 
       return { messages, latestHistoryId };
     } catch (error: unknown) {

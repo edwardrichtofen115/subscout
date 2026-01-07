@@ -1,13 +1,31 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db, users, processedEmails, subscriptions, settings } from "@/lib/db";
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 import { GmailService } from "@/lib/services/gmail";
 import { ClaudeService } from "@/lib/services/claude";
 import { CalendarService } from "@/lib/services/calendar";
 import { getValidAccessToken } from "@/lib/services/token";
-import type { GmailPushData } from "@/types";
+import type { GmailPushData, GmailMessage } from "@/types";
 
 const PUBSUB_VERIFICATION_TOKEN = process.env.PUBSUB_VERIFICATION_TOKEN;
+const BATCH_SIZE = 10;
+
+/**
+ * Process items in parallel batches with controlled concurrency
+ */
+async function processInBatches<T, R>(
+  items: T[],
+  processor: (item: T) => Promise<R>,
+  batchSize: number = BATCH_SIZE
+): Promise<PromiseSettledResult<R>[]> {
+  const results: PromiseSettledResult<R>[] = [];
+  for (let i = 0; i < items.length; i += batchSize) {
+    const batch = items.slice(i, i + batchSize);
+    const batchResults = await Promise.allSettled(batch.map(processor));
+    results.push(...batchResults);
+  }
+  return results;
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -89,118 +107,168 @@ export async function POST(request: NextRequest) {
     let subscriptionCount = 0;
     let errorCount = 0;
 
-    for (const message of messages) {
-      const messageId = message.id;
-      let emailSubject = "";
-      let emailFrom = "";
-
-      try {
-        // Skip promotional emails (additional safeguard)
-        const hasPromotionLabel = message.labelIds?.some(
-          (label) => label === "CATEGORY_PROMOTIONS"
+    // Step 1: Filter out promotional emails
+    const nonPromotionalMessages = messages.filter((message) => {
+      const hasPromotionLabel = message.labelIds?.some(
+        (label) => label === "CATEGORY_PROMOTIONS"
+      );
+      if (hasPromotionLabel) {
+        console.log(
+          `[Webhook] Email ${message.id}: SKIPPED - promotional email`
         );
-        if (hasPromotionLabel) {
-          console.log(
-            `[Webhook] Email ${messageId}: SKIPPED - promotional email`
-          );
-          skippedCount++;
-          continue;
-        }
+        skippedCount++;
+        return false;
+      }
+      return true;
+    });
 
-        const existingProcessed = await db.query.processedEmails.findFirst({
+    // Step 2: Batch check which emails are already processed
+    const messageIds = nonPromotionalMessages.map((m) => m.id);
+    const alreadyProcessed = messageIds.length > 0
+      ? await db.query.processedEmails.findMany({
           where: and(
             eq(processedEmails.userId, user.id),
-            eq(processedEmails.gmailMessageId, messageId)
+            inArray(processedEmails.gmailMessageId, messageIds)
           ),
-        });
+        })
+      : [];
+    const processedIdSet = new Set(alreadyProcessed.map((p) => p.gmailMessageId));
 
-        if (existingProcessed) {
-          console.log(
-            `[Webhook] Email ${messageId}: SKIPPED - already processed`
-          );
-          skippedCount++;
-          continue;
-        }
+    // Filter to only unprocessed messages
+    const messagesToProcess = nonPromotionalMessages.filter((message) => {
+      if (processedIdSet.has(message.id)) {
+        console.log(
+          `[Webhook] Email ${message.id}: SKIPPED - already processed`
+        );
+        skippedCount++;
+        return false;
+      }
+      return true;
+    });
 
+    if (messagesToProcess.length === 0) {
+      console.log(
+        `[Webhook] Summary for user ${user.email}: ${processedCount} processed, ${subscriptionCount} subscriptions created, ${skippedCount} skipped, ${errorCount} errors`
+      );
+      return NextResponse.json({ status: "ok" });
+    }
+
+    // Step 3: Classify all emails in parallel batches
+    type ClassificationResult = {
+      message: GmailMessage;
+      emailContent: { subject: string; from: string; body: string; date: Date };
+      classification: Awaited<ReturnType<typeof claudeService.classifyEmail>>;
+    };
+
+    const classificationResults = await processInBatches(
+      messagesToProcess,
+      async (message): Promise<ClassificationResult> => {
         const emailContent = GmailService.extractEmailContent(message);
-        emailSubject = emailContent.subject;
-        emailFrom = emailContent.from;
-
         const classification = await claudeService.classifyEmail(
           emailContent.subject,
           emailContent.from,
           emailContent.body,
           emailContent.date
         );
+        return { message, emailContent, classification };
+      }
+    );
 
-        await db.insert(processedEmails).values({
-          userId: user.id,
-          gmailMessageId: messageId,
-          isSubscription: classification.is_subscription,
-        });
+    // Step 4: Process results in parallel batches (DB writes + calendar)
+    const successfulClassifications = classificationResults
+      .filter(
+        (result): result is PromiseFulfilledResult<ClassificationResult> =>
+          result.status === "fulfilled"
+      )
+      .map((result) => result.value);
 
-        processedCount++;
-
-        if (classification.is_subscription && classification.confidence >= 0.7) {
-          let endDate: Date | null = null;
-
-          if (classification.end_date) {
-            endDate = new Date(classification.end_date);
-          } else if (classification.duration_days) {
-            endDate = new Date(emailContent.date);
-            endDate.setDate(endDate.getDate() + classification.duration_days);
-          } else {
-            endDate = new Date(emailContent.date);
-            endDate.setDate(endDate.getDate() + 14);
-          }
-
-          let calendarEventId: string | null = null;
-          if (endDate && userSettings) {
-            try {
-              calendarEventId = await calendarService.createReminder(
-                classification.service_name || "Unknown Service",
-                classification.type || "subscription",
-                endDate,
-                userSettings.reminderDaysBefore
-              );
-            } catch (calendarError) {
-              console.error(
-                `[Webhook] Email ${messageId}: ERROR creating calendar event -`,
-                calendarError
-              );
-            }
-          }
-
-          await db.insert(subscriptions).values({
-            userId: user.id,
-            serviceName: classification.service_name || "Unknown Service",
-            type: classification.type || "subscription",
-            detectedDate: emailContent.date,
-            endDate,
-            calendarEventId,
-            status: "active",
-            emailSubject: emailContent.subject,
-            emailSnippet: message.snippet,
-            confidence: Math.round(classification.confidence * 100),
-          });
-
-          subscriptionCount++;
-          console.log(
-            `[Webhook] Email ${messageId}: SUCCESS - Subscription created | Subject: "${emailSubject}" | From: ${emailFrom} | Service: ${classification.service_name} | Type: ${classification.type} | Confidence: ${Math.round(classification.confidence * 100)}% | Duration: ${classification.duration_days ? classification.duration_days + " days" : "N/A"} | EndDate: ${classification.end_date || "N/A"} | Reasoning: ${classification.reasoning || "N/A"}`
-          );
-        } else {
-          console.log(
-            `[Webhook] Email ${messageId}: PROCESSED - Not a subscription | Subject: "${emailSubject}" | From: ${emailFrom} | IsSubscription: ${classification.is_subscription} | Confidence: ${Math.round(classification.confidence * 100)}% | Reasoning: ${classification.reasoning || "N/A"}`
-          );
-        }
-      } catch (error) {
+    // Log failed classifications
+    classificationResults
+      .filter((result) => result.status === "rejected")
+      .forEach((result) => {
         errorCount++;
         console.error(
-          `[Webhook] Email ${messageId}: ERROR processing email | Subject: "${emailSubject}" | From: ${emailFrom} | Error:`,
-          error instanceof Error ? error.message : String(error)
+          `[Webhook] ERROR classifying email:`,
+          (result as PromiseRejectedResult).reason
         );
+      });
+
+    await processInBatches(
+      successfulClassifications,
+      async ({ message, emailContent, classification }) => {
+        const messageId = message.id;
+
+        try {
+          // Insert processed email record
+          await db.insert(processedEmails).values({
+            userId: user.id,
+            gmailMessageId: messageId,
+            isSubscription: classification.is_subscription,
+          });
+
+          processedCount++;
+
+          if (classification.is_subscription && classification.confidence >= 0.7) {
+            let endDate: Date | null = null;
+
+            if (classification.end_date) {
+              endDate = new Date(classification.end_date);
+            } else if (classification.duration_days) {
+              endDate = new Date(emailContent.date);
+              endDate.setDate(endDate.getDate() + classification.duration_days);
+            } else {
+              endDate = new Date(emailContent.date);
+              endDate.setDate(endDate.getDate() + 14);
+            }
+
+            let calendarEventId: string | null = null;
+            if (endDate && userSettings) {
+              try {
+                calendarEventId = await calendarService.createReminder(
+                  classification.service_name || "Unknown Service",
+                  classification.type || "subscription",
+                  endDate,
+                  userSettings.reminderDaysBefore
+                );
+              } catch (calendarError) {
+                console.error(
+                  `[Webhook] Email ${messageId}: ERROR creating calendar event -`,
+                  calendarError
+                );
+              }
+            }
+
+            await db.insert(subscriptions).values({
+              userId: user.id,
+              serviceName: classification.service_name || "Unknown Service",
+              type: classification.type || "subscription",
+              detectedDate: emailContent.date,
+              endDate,
+              calendarEventId,
+              status: "active",
+              emailSubject: emailContent.subject,
+              emailSnippet: message.snippet,
+              confidence: Math.round(classification.confidence * 100),
+            });
+
+            subscriptionCount++;
+            console.log(
+              `[Webhook] Email ${messageId}: SUCCESS - Subscription created | Subject: "${emailContent.subject}" | From: ${emailContent.from} | Service: ${classification.service_name} | Type: ${classification.type} | Confidence: ${Math.round(classification.confidence * 100)}% | Duration: ${classification.duration_days ? classification.duration_days + " days" : "N/A"} | EndDate: ${classification.end_date || "N/A"} | Reasoning: ${classification.reasoning || "N/A"}`
+            );
+          } else {
+            console.log(
+              `[Webhook] Email ${messageId}: PROCESSED - Not a subscription | Subject: "${emailContent.subject}" | From: ${emailContent.from} | IsSubscription: ${classification.is_subscription} | Confidence: ${Math.round(classification.confidence * 100)}% | Reasoning: ${classification.reasoning || "N/A"}`
+            );
+          }
+        } catch (error) {
+          errorCount++;
+          console.error(
+            `[Webhook] Email ${messageId}: ERROR processing email | Subject: "${emailContent.subject}" | From: ${emailContent.from} | Error:`,
+            error instanceof Error ? error.message : String(error)
+          );
+        }
       }
-    }
+    );
 
     console.log(
       `[Webhook] Summary for user ${user.email}: ${processedCount} processed, ${subscriptionCount} subscriptions created, ${skippedCount} skipped, ${errorCount} errors`
