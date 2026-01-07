@@ -129,7 +129,8 @@ export async function POST(request: NextRequest) {
         const classification = await claudeService.classifyEmail(
           emailContent.subject,
           emailContent.from,
-          emailContent.body
+          emailContent.body,
+          emailContent.date
         );
 
         await db.insert(processedEmails).values({

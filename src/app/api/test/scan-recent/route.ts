@@ -72,7 +72,8 @@ export async function GET(request: NextRequest) {
     const classification = await claudeService.classifyEmail(
       emailContent.subject,
       emailContent.from,
-      emailContent.body
+      emailContent.body,
+      emailContent.date
     );
 
     // Mark as processed (skip if already exists)

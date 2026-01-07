@@ -5,56 +5,84 @@ const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY!,
 });
 
-const CLASSIFICATION_PROMPT = `You are analyzing an email to determine if it represents a subscription signup, trial activation, or free trial confirmation.
+const SUBSCRIPTION_CLASSIFIER_PROMPT = `You are an email classification assistant helping users track subscriptions and trials so they can review them before renewal or expiration.
 
-Analyze the following email:
+## Your Task
+Analyze the provided email and determine if it represents a subscription signup, trial activation, or free trial confirmation that the user should be reminded about.
+
+## Email to Analyze
 Subject: {subject}
 From: {from}
+Date: {date}
 Body: {body}
 
-Respond with ONLY valid JSON (no markdown, no code blocks):
-{
-  "is_subscription": boolean,
-  "confidence": number between 0 and 1,
-  "service_name": "extracted service/company name" or null,
-  "type": "trial" | "subscription" | null,
-  "duration_days": estimated duration in days or null,
-  "end_date": "YYYY-MM-DD" if explicitly mentioned or null,
-  "reasoning": "brief explanation"
-}
+## Classification Guidelines
 
-Classification criteria:
+**Mark as subscription (is_subscription = true) when the email explicitly confirms:**
+- Trial activation: "free trial", "trial period", "trial started", "trial access", "X-day trial", "trial expires on", "trial will end"
+- Subscription start: "subscription confirmed", "membership activated", "billing started", "recurring payment", "subscription plan"
+- Time-limited access: explicit mention of access ending on a specific date or after a duration
 
-IS A SUBSCRIPTION (set is_subscription = true):
-- Trial emails: Any email confirming registration for a free trial, trial activation, trial started, "trial period", "free trial", "trial will remain active until", "trial access", "trial account", "trial plan"
-- Subscription emails: Payment confirmed, subscription started, membership activated, billing started, recurring subscription begun
-- Both trial AND subscription emails should be marked as is_subscription = true
-- Even if the email says "trial" or "free trial", it should still be marked as a subscription with type = "trial"
-
-IS NOT A SUBSCRIPTION (set is_subscription = false):
+**Mark as NOT a subscription (is_subscription = false) for:**
+- Generic welcome/onboarding emails that only say "thanks for signing up" without trial or billing language
+- Account creation confirmations without subscription context
+- One-time purchase receipts
 - Newsletters, marketing emails, promotional offers
-- Receipts for one-time purchases (unless subscription signup)
-- Shipping notifications
-- Password resets
-- Account verifications (unless they're for a trial/subscription signup)
-- General product updates or announcements
+- Password resets, account verifications, shipping notifications
+- Product updates, feedback requests, team introductions
 
-Important extraction rules:
-- Extract service name from sender domain, email content, or signature
-- If end date is explicitly mentioned (e.g., "until January 24th, 2026", "trial expires on 2026-01-24"), extract it in YYYY-MM-DD format
-- If duration is mentioned (e.g., "14-day trial", "30 days free"), extract the number of days
-- If an email confirms a trial registration or activation, it IS a subscription regardless of whether payment was mentioned
-- For trial emails, set type = "trial"
-- For paid subscriptions, set type = "subscription"`;
+The key distinction: the email must explicitly reference a trial period, subscription, billing cycle, or time-limited access—not just account creation.
+
+## Extraction Rules
+1. **Service name**: Extract from sender name, email domain, or prominent branding in the body
+2. **End date**: If explicitly stated (e.g., "expires January 24, 2026"), convert to YYYY-MM-DD format
+3. **Duration**: If mentioned (e.g., "14-day trial"), extract the number; for monthly/yearly, convert to days (30/365)
+4. **Type**: Use "trial" for free trials, "subscription" for paid recurring services
+
+## Response Format
+Respond with valid JSON only—no markdown formatting, no code blocks, no additional text:
+
+{"is_subscription": boolean, "confidence": number, "service_name": string | null, "type": "trial" | "subscription" | null, "duration_days": number | null, "end_date": "YYYY-MM-DD" | null, "reasoning": string}
+
+Where:
+- confidence: 0.0 to 1.0 indicating classification certainty
+- reasoning: one sentence explaining your classification decision`;
+
+const EXAMPLES = `
+## Examples
+
+Email: "Welcome to Notion! Your 14-day Pro trial has started. Your trial ends on Feb 1, 2026."
+→ {"is_subscription": true, "confidence": 0.95, "service_name": "Notion", "type": "trial", "duration_days": 14, "end_date": "2026-02-01", "reasoning": "Explicitly confirms 14-day trial activation with end date."}
+
+Email: "Thanks for joining Acme! We're excited to have you. Check out our getting started guide."
+→ {"is_subscription": false, "confidence": 0.9, "service_name": "Acme", "type": null, "duration_days": null, "end_date": null, "reasoning": "Generic welcome email with no mention of trial, subscription, or billing."}
+`;
 
 export class ClaudeService {
   async classifyEmail(
     subject: string,
     from: string,
-    body: string
+    body: string,
+    date?: Date
   ): Promise<EmailClassification> {
-    const prompt = CLASSIFICATION_PROMPT.replace("{subject}", subject)
+    const dateStr = date
+      ? date.toLocaleString("en-US", {
+          weekday: "short",
+          year: "numeric",
+          month: "short",
+          day: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+          timeZoneName: "short",
+        })
+      : "Not provided";
+
+    const prompt = (
+      SUBSCRIPTION_CLASSIFIER_PROMPT + EXAMPLES
+    )
+      .replace("{subject}", subject)
       .replace("{from}", from)
+      .replace("{date}", dateStr)
       .replace("{body}", body.substring(0, 4000));
 
     let response;
