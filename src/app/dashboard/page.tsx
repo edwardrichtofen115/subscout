@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { GmailService } from "@/lib/services/gmail";
 import { getValidAccessToken } from "@/lib/services/token";
 import { SyncButton } from "@/components/sync-button";
+import { getRelativeTime } from "@/lib/utils";
 
 async function setupGmailWatch(userId: string) {
   "use server";
@@ -185,15 +186,7 @@ export default async function DashboardPage() {
                   Last Sync
                 </p>
                 <p className="text-lg font-semibold">
-                  {user.lastSyncAt
-                    ? new Date(user.lastSyncAt).toLocaleString(undefined, {
-                        month: "short",
-                        day: "numeric",
-                        year: "numeric",
-                        hour: "numeric",
-                        minute: "2-digit",
-                      })
-                    : "Never"}
+                  {getRelativeTime(user.lastSyncAt)}
                 </p>
               </div>
             </div>
