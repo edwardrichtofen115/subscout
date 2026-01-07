@@ -45,3 +45,18 @@ export interface CalendarEvent {
   start: { date: string };
   end: { date: string };
 }
+
+export type FeedbackReason =
+  | "not_subscription"
+  | "wrong_service_name"
+  | "wrong_dates"
+  | "wrong_type"
+  | "other";
+
+export const FEEDBACK_REASON_LABELS: Record<FeedbackReason, string> = {
+  not_subscription: "This is not a subscription/trial",
+  wrong_service_name: "Wrong service name",
+  wrong_dates: "Incorrect dates",
+  wrong_type: "Wrong type (trial vs subscription)",
+  other: "Other issue",
+};

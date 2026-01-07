@@ -1,8 +1,10 @@
 "use client";
 
+import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { FeedbackDialog } from "./feedback-dialog";
 import type { Subscription } from "@/lib/db/schema";
 
 interface SubscriptionCardProps {
@@ -14,6 +16,8 @@ export function SubscriptionCard({
   subscription,
   onDelete,
 }: SubscriptionCardProps) {
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+
   const statusColors = {
     active: "bg-green-100 text-green-800",
     expiring_soon: "bg-yellow-100 text-yellow-800",
@@ -47,6 +51,7 @@ export function SubscriptionCard({
   const days = daysUntil(subscription.endDate);
 
   return (
+    <>
     <Card>
       <CardHeader className="pb-2">
         <div className="flex items-start justify-between">
@@ -85,16 +90,31 @@ export function SubscriptionCard({
             </p>
           )}
         </div>
-        <div className="flex justify-end mt-4">
+        <div className="flex justify-end gap-2 mt-4">
           <Button
             variant="ghost"
             size="sm"
+            onClick={() => setFeedbackOpen(true)}
+          >
+            Report Issue
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-red-600 hover:text-red-700 hover:bg-red-50"
             onClick={() => onDelete(subscription.id)}
           >
-            Dismiss
+            Remove Reminder
           </Button>
         </div>
       </CardContent>
     </Card>
+
+    <FeedbackDialog
+      subscription={subscription}
+      open={feedbackOpen}
+      onOpenChange={setFeedbackOpen}
+    />
+    </>
   );
 }
