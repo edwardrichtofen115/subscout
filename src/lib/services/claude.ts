@@ -24,14 +24,28 @@ Respond with ONLY valid JSON (no markdown, no code blocks):
 }
 
 Classification criteria:
-- Trial: Free trial started, X days free, trial activation, trial welcome, free access period
-- Subscription: Payment confirmed, subscription started, membership activated, billing started
-- NOT subscription: Newsletters, marketing emails, receipts for one-time purchases, shipping notifications, password resets, account verifications, promotional offers
 
-Extract the service name from sender domain or email content.
-If duration is mentioned (e.g., "14-day trial"), extract it.
-If specific end date mentioned, extract it.
-Be conservative - only mark as subscription if clearly a signup/activation email.`;
+IS A SUBSCRIPTION (set is_subscription = true):
+- Trial emails: Any email confirming registration for a free trial, trial activation, trial started, "trial period", "free trial", "trial will remain active until", "trial access", "trial account", "trial plan"
+- Subscription emails: Payment confirmed, subscription started, membership activated, billing started, recurring subscription begun
+- Both trial AND subscription emails should be marked as is_subscription = true
+- Even if the email says "trial" or "free trial", it should still be marked as a subscription with type = "trial"
+
+IS NOT A SUBSCRIPTION (set is_subscription = false):
+- Newsletters, marketing emails, promotional offers
+- Receipts for one-time purchases (unless subscription signup)
+- Shipping notifications
+- Password resets
+- Account verifications (unless they're for a trial/subscription signup)
+- General product updates or announcements
+
+Important extraction rules:
+- Extract service name from sender domain, email content, or signature
+- If end date is explicitly mentioned (e.g., "until January 24th, 2026", "trial expires on 2026-01-24"), extract it in YYYY-MM-DD format
+- If duration is mentioned (e.g., "14-day trial", "30 days free"), extract the number of days
+- If an email confirms a trial registration or activation, it IS a subscription regardless of whether payment was mentioned
+- For trial emails, set type = "trial"
+- For paid subscriptions, set type = "subscription"`;
 
 export class ClaudeService {
   async classifyEmail(
@@ -46,7 +60,7 @@ export class ClaudeService {
     let response;
     try {
       response = await anthropic.messages.create({
-        model: "claude-haiku-4-5-20251001",
+        model: "claude-3-5-sonnet-20241022",
         max_tokens: 500,
         messages: [
           {
