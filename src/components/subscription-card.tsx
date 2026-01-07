@@ -114,6 +114,7 @@ export function SubscriptionCard({
       subscription={subscription}
       open={feedbackOpen}
       onOpenChange={setFeedbackOpen}
+      onDelete={onDelete}
     />
     </>
   );
