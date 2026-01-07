@@ -26,14 +26,25 @@ export class EmailService {
     data: FeedbackEmailData
   ): Promise<{ success: boolean; error?: string }> {
     try {
+      console.log("[Email] Attempting to send feedback email...");
+      console.log("[Email] API Key present:", !!process.env.RESEND_API_KEY);
+
       const emailBody = this.buildFeedbackEmailBody(data);
 
-      await this.resend.emails.send({
+      const { data: emailData, error } = await this.resend.emails.send({
         from: "SubScout <onboarding@resend.dev>",
         to: EmailService.FEEDBACK_RECIPIENT,
         subject: `[SubScout Feedback] ${data.feedbackReason} - ${data.serviceName}`,
         text: emailBody,
       });
+
+      console.log("[Email] Resend response - data:", emailData);
+      console.log("[Email] Resend response - error:", error);
+
+      if (error) {
+        console.error("[Email] Resend returned error:", error);
+        return { success: false, error: error.message };
+      }
 
       return { success: true };
     } catch (error) {

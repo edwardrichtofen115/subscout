@@ -6,10 +6,13 @@ import { EmailService } from "@/lib/services/email";
 import { FEEDBACK_REASON_LABELS, type FeedbackReason } from "@/types";
 
 export async function POST(request: NextRequest) {
+  console.log("[Feedback API] Received feedback request");
   try {
     const session = await auth();
+    console.log("[Feedback API] Session:", session?.user?.email ?? "No session");
 
     if (!session?.user?.email) {
+      console.log("[Feedback API] Unauthorized - no session");
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
@@ -18,8 +21,10 @@ export async function POST(request: NextRequest) {
     });
 
     if (!user) {
+      console.log("[Feedback API] User not found in database");
       return NextResponse.json({ error: "User not found" }, { status: 404 });
     }
+    console.log("[Feedback API] User found:", user.id);
 
     const body = await request.json();
     const { subscriptionId, reason, description } = body as {
@@ -27,8 +32,10 @@ export async function POST(request: NextRequest) {
       reason: FeedbackReason;
       description: string;
     };
+    console.log("[Feedback API] Request body:", { subscriptionId, reason, description });
 
     if (!subscriptionId || !reason) {
+      console.log("[Feedback API] Missing required fields");
       return NextResponse.json(
         { error: "Missing required fields" },
         { status: 400 }
@@ -43,12 +50,15 @@ export async function POST(request: NextRequest) {
     });
 
     if (!subscription) {
+      console.log("[Feedback API] Subscription not found:", subscriptionId);
       return NextResponse.json(
         { error: "Subscription not found" },
         { status: 404 }
       );
     }
+    console.log("[Feedback API] Subscription found:", subscription.serviceName);
 
+    console.log("[Feedback API] Sending email...");
     const emailService = new EmailService();
     const result = await emailService.sendFeedback({
       userEmail: session.user.email,
@@ -64,6 +74,7 @@ export async function POST(request: NextRequest) {
       feedbackDescription: description || "",
     });
 
+    console.log("[Feedback API] Email result:", result);
     if (!result.success) {
       console.error("[Feedback API] Failed to send email:", result.error);
       return NextResponse.json(
@@ -72,9 +83,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    console.log("[Feedback API] Success!");
     return NextResponse.json({ status: "ok" });
   } catch (error) {
-    console.error("Feedback submission error:", error);
+    console.error("[Feedback API] Uncaught error:", error);
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 }
