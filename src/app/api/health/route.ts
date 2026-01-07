@@ -115,7 +115,7 @@ async function checkClaudeAPI(): Promise<CheckResult> {
 
     // Make a minimal API call to verify the key works
     await client.messages.create({
-      model: "claude-sonnet-4-20250514",
+      model: "claude-sonnet-4-5-20250929",
       max_tokens: 10,
       messages: [{ role: "user", content: "Hi" }],
     });

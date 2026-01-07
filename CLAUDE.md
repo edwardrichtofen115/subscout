@@ -35,7 +35,7 @@ SubScout is a subscription and trial reminder service that:
 - History API used to fetch only new messages since last notification
 
 ### Email Classification
-- Claude Sonnet 4 analyzes email subject, sender, and body
+- Claude Sonnet 4.5 (claude-sonnet-4-5-20250929) analyzes email subject, sender, and body
 - Returns structured JSON with service name, type (trial/subscription), duration, end date
 - Only emails with confidence ≥ 0.7 are saved
 - Processes first 4000 chars of email body to stay within token limits
