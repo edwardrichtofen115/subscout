@@ -1,7 +1,7 @@
 import { auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { db, subscriptions, settings, users, processedEmails } from "@/lib/db";
+import { db, subscriptions, settings, users, processedEmails, account } from "@/lib/db";
 import { eq, sql } from "drizzle-orm";
 import { Header } from "@/components/header";
 import { SubscriptionList } from "@/components/subscription-list";
@@ -79,16 +79,52 @@ async function disableGmailWatch(userId: string) {
 export default async function DashboardPage() {
   const session = await auth();
 
-  if (!session?.user) {
+  if (!session?.user?.email) {
     redirect("/signin");
   }
 
-  const user = await db.query.users.findFirst({
-    where: eq(users.email, session.user.email!),
+  let user = await db.query.users.findFirst({
+    where: eq(users.email, session.user.email),
   });
 
+  // Handle race condition: user might not exist in app's users table yet
+  // This can happen on mobile when the signIn event hasn't completed
   if (!user) {
-    redirect("/signin");
+    console.log("Dashboard: user not found in users table, attempting to create from session");
+
+    try {
+      // Get OAuth tokens from NextAuth's account table
+      const authAccount = await db.query.account.findFirst({
+        where: eq(account.userId, session.user.id),
+      });
+
+      // Create the user in the app's users table
+      const [newUser] = await db.insert(users).values({
+        email: session.user.email,
+        name: session.user.name,
+        image: session.user.image,
+        googleAccessToken: authAccount?.access_token ?? null,
+        googleRefreshToken: authAccount?.refresh_token ?? null,
+        googleTokenExpiry: authAccount?.expires_at
+          ? new Date(authAccount.expires_at * 1000)
+          : null,
+      }).returning();
+
+      user = newUser;
+      console.log("Dashboard: user created successfully");
+    } catch (error) {
+      // If insert fails (e.g., duplicate key), try to fetch again
+      // This handles the case where the signIn event completed between our check and insert
+      console.log("Dashboard: insert failed, retrying fetch", error);
+      user = await db.query.users.findFirst({
+        where: eq(users.email, session.user.email),
+      });
+
+      if (!user) {
+        console.error("Dashboard: still no user after retry, redirecting to signin");
+        redirect("/signin");
+      }
+    }
   }
 
   const userSettings = await db.query.settings.findFirst({
