@@ -4,6 +4,7 @@ import { db, settings, users, account } from "@/lib/db";
 import { eq } from "drizzle-orm";
 import { Header } from "@/components/header";
 import { SettingsForm } from "@/components/settings-form";
+import { Footer } from "@/components/footer";
 
 export default async function SettingsPage() {
   const session = await auth();
@@ -72,10 +73,10 @@ export default async function SettingsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-background flex flex-col">
       <Header user={session.user} />
 
-      <main className="container mx-auto px-4 py-8 max-w-2xl">
+      <main className="container mx-auto px-4 py-8 max-w-2xl flex-1">
         <div className="mb-8">
           <h1 className="text-2xl font-bold">Settings</h1>
           <p className="text-muted-foreground">
@@ -85,6 +86,7 @@ export default async function SettingsPage() {
 
         <SettingsForm initialSettings={userSettings} />
       </main>
+      <Footer />
     </div>
   );
 }

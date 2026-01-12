@@ -11,6 +11,7 @@ import { getValidAccessToken } from "@/lib/services/token";
 import { SyncButton } from "@/components/sync-button";
 import { getRelativeTime } from "@/lib/utils";
 import { EmailsProcessedStat } from "@/components/emails-processed-stat";
+import { Footer } from "@/components/footer";
 
 async function setupGmailWatch(userId: string) {
   "use server";
@@ -164,10 +165,10 @@ export default async function DashboardPage() {
   const isMonitoringEnabled = userSettings?.enabled ?? false;
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-background flex flex-col">
       <Header user={session.user} />
 
-      <main className="container mx-auto px-4 py-8">
+      <main className="container mx-auto px-4 py-8 flex-1">
         <div className="flex items-center justify-between mb-8">
           <div>
             <h1 className="text-2xl font-bold">Your Subscriptions</h1>
@@ -234,6 +235,7 @@ export default async function DashboardPage() {
 
         <SubscriptionList initialSubscriptions={userSubscriptions} />
       </main>
+      <Footer />
     </div>
   );
 }

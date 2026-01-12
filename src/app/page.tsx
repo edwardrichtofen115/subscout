@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
+import { Footer } from "@/components/footer";
 
 export default async function LandingPage() {
   const session = await auth();
@@ -116,11 +117,7 @@ export default async function LandingPage() {
         </div>
       </main>
 
-      <footer className="container mx-auto px-4 py-8 border-t mt-20">
-        <p className="text-center text-muted-foreground text-sm">
-          SubScout - Your subscription watchdog
-        </p>
-      </footer>
+      <Footer />
     </div>
   );
 }
