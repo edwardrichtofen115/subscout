@@ -2,7 +2,7 @@ import { auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { db, subscriptions, settings, users, processedEmails, account } from "@/lib/db";
-import { eq, sql } from "drizzle-orm";
+import { eq, sql, gte, and } from "drizzle-orm";
 import { Header } from "@/components/header";
 import { SubscriptionList } from "@/components/subscription-list";
 import { Button } from "@/components/ui/button";
@@ -10,6 +10,7 @@ import { GmailService } from "@/lib/services/gmail";
 import { getValidAccessToken } from "@/lib/services/token";
 import { SyncButton } from "@/components/sync-button";
 import { getRelativeTime } from "@/lib/utils";
+import { EmailsProcessedStat } from "@/components/emails-processed-stat";
 
 async function setupGmailWatch(userId: string) {
   "use server";
@@ -144,11 +145,17 @@ export default async function DashboardPage() {
     orderBy: (subscriptions, { desc }) => [desc(subscriptions.createdAt)],
   });
 
-  // Get processed emails count
+  // Get processed emails count for last 24 hours
+  const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
   const processedEmailsResult = await db
     .select({ count: sql<number>`count(*)` })
     .from(processedEmails)
-    .where(eq(processedEmails.userId, user.id));
+    .where(
+      and(
+        eq(processedEmails.userId, user.id),
+        gte(processedEmails.processedAt, twentyFourHoursAgo)
+      )
+    );
 
   const processedEmailsCount = Number(processedEmailsResult[0]?.count || 0);
 
@@ -211,12 +218,7 @@ export default async function DashboardPage() {
         <div className="mb-8 p-6 bg-muted/50 rounded-lg border">
           <div className="flex items-center justify-between flex-wrap gap-4">
             <div className="flex items-center gap-8">
-              <div>
-                <p className="text-sm text-muted-foreground mb-1">
-                  Emails Processed
-                </p>
-                <p className="text-2xl font-bold">{processedEmailsCount}</p>
-              </div>
+              <EmailsProcessedStat count={processedEmailsCount} />
               <div>
                 <p className="text-sm text-muted-foreground mb-1">
                   Last Sync
